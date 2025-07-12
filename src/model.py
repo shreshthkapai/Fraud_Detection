@@ -53,43 +53,62 @@ def train_with_class_weights(X_train: pd.DataFrame, y_train: pd.Series) -> dict:
     return models
 
 def tune_logistic_regression(X_train: pd.DataFrame, y_train: pd.Series) -> LogisticRegression:
-    """Tune logistic regression with GridSearchCV."""
+    """Tune logistic regression with fixed convergence."""
     param_grid = {
         'C': [0.1, 1, 10],
-        'penalty': ['l1', 'l2'],
-        'solver': ['liblinear']
+        'penalty': ['l2'],            
+        'solver': ['lbfgs'],           
+        'max_iter': [1000, 2000]        
     }
     
-    lr = LogisticRegression(class_weight='balanced', random_state=42)
-    grid_search = GridSearchCV(lr, param_grid, cv=3, scoring='roc_auc', n_jobs=-1)
+    lr = LogisticRegression(
+        class_weight='balanced', 
+        random_state=42,
+        max_iter=2000  
+     )
+
+    grid_search = GridSearchCV(lr, param_grid, cv=2, scoring='roc_auc', n_jobs=1)
     grid_search.fit(X_train, y_train)
     
     return grid_search.best_estimator_
 
 def tune_random_forest(X_train: pd.DataFrame, y_train: pd.Series) -> RandomForestClassifier:
-    """Tune random forest with GridSearchCV."""
+    """Tune random forest with optimized parameters for faster execution."""
+    # OPTIMIZED: Reduced parameter grid
     param_grid = {
-        'n_estimators': [50, 100, 200],
-        'max_depth': [10, 20, None],
-        'min_samples_split': [2, 5]
+        'n_estimators': [50, 100],         
+        'max_depth': [10, 15],             
+        'min_samples_split': [2, 5]         
     }
     
-    rf = RandomForestClassifier(class_weight='balanced', random_state=42)
-    grid_search = GridSearchCV(rf, param_grid, cv=3, scoring='roc_auc', n_jobs=-1)
+    rf = RandomForestClassifier(
+        class_weight='balanced', 
+        random_state=42,
+        n_jobs=2  
+    )
+    
+   
+    grid_search = GridSearchCV(
+        rf, param_grid, 
+        cv=2,          
+        scoring='roc_auc', 
+        n_jobs=1,      
+        verbose=1     
+    )
     grid_search.fit(X_train, y_train)
     
     return grid_search.best_estimator_
 
-def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 50) -> xgb.XGBClassifier:
-    """Tune XGBoost with Optuna."""
+def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 15) -> xgb.XGBClassifier:
+    """Tune XGBoost with Optuna - optimized for faster execution."""
     
     def objective(trial):
         params = {
-            'n_estimators': trial.suggest_int('n_estimators', 50, 300),
-            'max_depth': trial.suggest_int('max_depth', 3, 10),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+            'n_estimators': trial.suggest_int('n_estimators', 50, 150),    
+            'max_depth': trial.suggest_int('max_depth', 3, 6),            
+            'learning_rate': trial.suggest_float('learning_rate', 0.05, 0.3),  
+            'subsample': trial.suggest_float('subsample', 0.7, 1.0),     
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.7, 1.0), 
             'scale_pos_weight': len(y_train[y_train == 0]) / len(y_train[y_train == 1]),
             'random_state': 42
         }
@@ -101,7 +120,7 @@ def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int
         return roc_auc_score(y_train, y_pred_proba)
     
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=n_trials)
+    study.optimize(objective, n_trials=n_trials)  
     
     best_params = study.best_params
     best_params['scale_pos_weight'] = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
