@@ -31,7 +31,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Create additional features from existing data."""
     df = df.copy()
-    
+
     # Time-based features
     df['Hour'] = (df['Time'] % (24 * 3600)) // 3600
     df['Day'] = df['Time'] // (24 * 3600)
@@ -41,6 +41,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     
     # Transaction velocity (transactions per hour for each day)
     df['Trans_per_hour'] = df.groupby('Day')['Time'].transform('count') / 24
+    
+    # --- ADD THIS LINE ---
+    df = df.drop(columns=['Time']) # Drop the original, less useful Time column
+    # ---------------------
     
     return df
 
