@@ -106,24 +106,53 @@ def load_and_prepare_data():
 
 def get_feature_names(df):
     """Get the feature names used for training."""
-    # This should match the feature selection logic in main.py
-    feature_cols = [col for col in df.columns if col not in ['Class', 'Day', 'Hour', 'Trans_per_hour', 'Amount_log']]
+    # This should match the feature selection logic in main.py EXACTLY
+    feature_cols = [col for col in df.columns if col not in ['Class', 'Day', 'Hour', 'Trans_per_hour', 'Amount']]  # Remove 'Amount_log' from exclusion
     return feature_cols
 
 def prepare_single_transaction(transaction_data, feature_names):
-    """Prepare a single transaction for prediction."""
-    # Create a DataFrame with the correct feature names
-    df = pd.DataFrame([transaction_data], columns=feature_names)
+    """Prepare a single transaction for prediction using Amount_log."""
+    import pickle
     
-    # Normalize Amount if it's in the features
-    if 'Amount' in df.columns:
-        # Use the same normalization as in training
-        from sklearn.preprocessing import MinMaxScaler
-        scaler = MinMaxScaler()
-        # Note: In production, you'd load the fitted scaler from training
-        df['Amount'] = scaler.fit_transform(df[['Amount']])
+    # Create DataFrame with ALL possible features first
+    all_features = list(transaction_data.keys())
+    df = pd.DataFrame([transaction_data], columns=all_features)
     
-    return df
+    # Apply the same preprocessing pipeline as in training
+    from src.data_prep import clean_data, engineer_features, handle_outliers
+    
+    # Clean and engineer features (this will create Amount_log and drop Time)
+    df = clean_data(df)
+    df = engineer_features(df)
+    df = handle_outliers(df, columns=['Amount'])
+    
+    # Now select only the features that were used in training
+    # This should match the logic in main.py
+    available_features = [col for col in df.columns if col not in ['Class', 'Day', 'Hour', 'Trans_per_hour', 'Amount']]
+    
+    # Keep only the features that were used in training
+    training_features = [col for col in available_features if col in feature_names]
+    df_final = df[training_features]
+    
+    # Apply normalization to Amount_log if it exists
+    if 'Amount_log' in df_final.columns:
+        scaler_path = 'outputs/amount_scaler.pkl'
+        if os.path.exists(scaler_path):
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            df_final['Amount_log'] = scaler.transform(df_final[['Amount_log']])
+        else:
+            # Fallback normalization
+            from sklearn.preprocessing import MinMaxScaler
+            df_full = load_and_prepare_data()
+            if df_full is not None:
+                scaler = MinMaxScaler()
+                scaler.fit(df_full[['Amount_log']])
+                df_final['Amount_log'] = scaler.transform(df_final[['Amount_log']])
+    
+    return df_final
+
+
 
 # FIXED SHAP FUNCTIONS
 @st.cache_data
@@ -342,11 +371,11 @@ def display_prediction_with_shap(transaction_df, model, model_name, feature_name
                 
                 # Feature importance explanation
                 st.markdown("""
-                <div class="shap-explanation">
+                <div class="shap-explanation" style="color: #000000;">
                 <h4>🧠 Understanding the Explanation:</h4>
                 <ul>
-                <li><strong>Red bars</strong>: Features that increase fraud probability</li>
-                <li><strong>Blue bars</strong>: Features that decrease fraud probability</li>
+                <li><strong style="color:red;">Red bars</strong>: Features that increase fraud probability</li>
+                <li><strong style="color:blue;">Blue bars</strong>: Features that decrease fraud probability</li>
                 <li><strong>Bar size</strong>: Magnitude of the feature's impact</li>
                 <li><strong>Base value</strong>: Average prediction across all transactions</li>
                 </ul>
@@ -661,9 +690,13 @@ def main():
                 st.error(f"Error loading CSV file: {str(e)}")
     
     # NEW PAGE: Model Insights
+    # NEW PAGE: Model Insights
+# Replace the Model Insights section in your streamlit_app.py (around line 700-720)
+
+# NEW PAGE: Model Insights
     elif page == "🧠 Model Insights":
         st.header("Model Insights & Feature Importance")
-        
+
         # Load models and data
         models = load_models()
         df = load_and_prepare_data()
@@ -673,7 +706,29 @@ def main():
             return
         
         feature_names = get_feature_names(df)
+        
+        # FIXED: Get the sample data that already has the preprocessing applied
+        # Since df is already preprocessed by load_and_prepare_data(), we can use it directly
         X_sample = df[feature_names].sample(n=500, random_state=42)
+        
+        # Apply the same normalization as in training (only if Amount_log exists)
+        if 'Amount_log' in X_sample.columns:
+            scaler_path = 'outputs/amount_scaler.pkl'
+            if os.path.exists(scaler_path):
+                with open(scaler_path, 'rb') as f:
+                    scaler = pickle.load(f)
+                # Apply the scaler to Amount_log
+                X_sample_scaled = X_sample.copy()
+                X_sample_scaled['Amount_log'] = scaler.transform(X_sample[['Amount_log']])
+                X_sample = X_sample_scaled
+            else:
+                # Fallback normalization using the full dataset
+                from sklearn.preprocessing import MinMaxScaler
+                fallback_scaler = MinMaxScaler()
+                fallback_scaler.fit(df[['Amount_log']])
+                X_sample_scaled = X_sample.copy()
+                X_sample_scaled['Amount_log'] = fallback_scaler.transform(X_sample[['Amount_log']])
+                X_sample = X_sample_scaled
         
         # Model selection
         model_name = st.selectbox("Select Model for Analysis", list(models.keys()))
@@ -716,6 +771,8 @@ def main():
             - **Blue**: Feature values that decrease fraud probability
             - **Vertical spread**: Shows the range of impact for each feature
             """)
+        else:
+            st.error("Could not create SHAP explainer for this model.")
 
 if __name__ == "__main__":
     main()
