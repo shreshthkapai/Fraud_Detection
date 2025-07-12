@@ -13,9 +13,13 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
+# SHAP imports - NEW
+import shap
+from io import BytesIO
+import base64
+
 # Import your custom modules
 from src.data_prep import load_data, clean_data, engineer_features, handle_outliers, normalize_features
-from src.model import train_tuned_models, evaluate_models, stratified_split
 
 # Page config
 st.set_page_config(
@@ -50,6 +54,13 @@ st.markdown("""
     .safe-alert {
         background-color: #e8f5e8;
         border: 2px solid #4caf50;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .shap-explanation {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
         border-radius: 0.5rem;
         padding: 1rem;
         margin: 1rem 0;
@@ -114,8 +125,140 @@ def prepare_single_transaction(transaction_data, feature_names):
     
     return df
 
-def display_prediction(transaction_df, model, model_name):
-    """Display prediction results."""
+# FIXED SHAP FUNCTIONS
+@st.cache_data
+def create_shap_explainer(_model, X_sample):
+    """Create SHAP explainer for the model."""
+    try:
+        # For tree-based models (Random Forest, XGBoost)
+        if hasattr(_model, 'feature_importances_'):
+            explainer = shap.TreeExplainer(_model)
+        else:
+            # For linear models (Logistic Regression)
+            explainer = shap.LinearExplainer(_model, X_sample)
+        return explainer
+    except Exception as e:
+        st.error(f"Error creating SHAP explainer: {str(e)}")
+        return None
+
+def generate_shap_values(explainer, X_data):
+    """Generate SHAP values for given data."""
+    try:
+        shap_values = explainer.shap_values(X_data)
+        # For binary classification, some models return a list
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]  # Take positive class
+        return shap_values
+    except Exception as e:
+        st.error(f"Error generating SHAP values: {str(e)}")
+        return None
+
+def plot_shap_waterfall(explainer, X_single, feature_names):
+    """Create SHAP waterfall plot for a single prediction."""
+    try:
+        shap_values = generate_shap_values(explainer, X_single)
+        if shap_values is None:
+            return None
+        
+        # Get expected value properly
+        expected_value = explainer.expected_value
+        if isinstance(expected_value, np.ndarray):
+            expected_value = expected_value[0]
+        
+        # Create the plot
+        plt.figure(figsize=(10, 6))
+        shap.waterfall_plot(
+            shap.Explanation(
+                values=shap_values[0],
+                base_values=expected_value,
+                data=X_single.iloc[0].values,
+                feature_names=feature_names
+            ),
+            show=False
+        )
+        
+        # Save to BytesIO
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        st.error(f"Error creating waterfall plot: {str(e)}")
+        return None
+
+def plot_shap_summary(explainer, X_data, feature_names):
+    """Create SHAP summary plot."""
+    try:
+        shap_values = generate_shap_values(explainer, X_data)
+        if shap_values is None:
+            return None
+            
+        plt.figure(figsize=(10, 8))
+        shap.summary_plot(shap_values, X_data, feature_names=feature_names, show=False)
+        
+        # Save to BytesIO
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        st.error(f"Error creating summary plot: {str(e)}")
+        return None
+
+def plot_shap_bar(explainer, X_data, feature_names):
+    """Create SHAP bar plot for feature importance."""
+    try:
+        shap_values = generate_shap_values(explainer, X_data)
+        if shap_values is None:
+            return None
+            
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(shap_values, X_data, feature_names=feature_names, plot_type="bar", show=False)
+        
+        # Save to BytesIO
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        st.error(f"Error creating bar plot: {str(e)}")
+        return None
+
+def get_top_shap_features(explainer, X_single, feature_names, top_n=10):
+    """Get top N features by SHAP value magnitude."""
+    try:
+        shap_values = generate_shap_values(explainer, X_single)
+        if shap_values is None:
+            return None
+            
+        # Get absolute SHAP values
+        abs_shap = np.abs(shap_values[0])
+        
+        # Get top features
+        top_indices = np.argsort(abs_shap)[-top_n:][::-1]
+        
+        top_features = []
+        for idx in top_indices:
+            top_features.append({
+                'feature': feature_names[idx],
+                'shap_value': shap_values[0][idx],
+                'feature_value': X_single.iloc[0, idx],
+                'impact': 'Increases Fraud Risk' if shap_values[0][idx] > 0 else 'Decreases Fraud Risk'
+            })
+        
+        return top_features
+    except Exception as e:
+        st.error(f"Error getting top features: {str(e)}")
+        return None
+
+def display_prediction_with_shap(transaction_df, model, model_name, feature_names):
+    """Display prediction results with SHAP explanations."""
     try:
         # Make prediction
         prediction = model.predict(transaction_df)[0]
@@ -159,10 +302,69 @@ def display_prediction(transaction_df, model, model_name):
                 height=300
             )
             st.plotly_chart(fig, use_container_width=True)
+        
+        # SHAP Explanations - NEW SECTION
+        st.markdown("---")
+        st.markdown("## 🔍 Model Explanation (SHAP)")
+        
+        # Create sample data for explainer
+        df_full = load_and_prepare_data()
+        if df_full is not None:
+            X_sample = df_full[feature_names].sample(n=100, random_state=42)
+            
+            # Create explainer
+            explainer = create_shap_explainer(model, X_sample)
+            
+            if explainer is not None:
+                # Top contributing features
+                st.subheader("🎯 Top Contributing Features")
+                top_features = get_top_shap_features(explainer, transaction_df, feature_names)
+                
+                if top_features:
+                    for i, feature in enumerate(top_features[:5]):
+                        col1, col2, col3 = st.columns([2, 1, 2])
+                        with col1:
+                            st.write(f"**{feature['feature']}**")
+                        with col2:
+                            st.write(f"{feature['feature_value']:.4f}")
+                        with col3:
+                            color = "red" if feature['shap_value'] > 0 else "green"
+                            st.markdown(f"<span style='color: {color}'>{feature['impact']}</span>", 
+                                      unsafe_allow_html=True)
+                
+                # Waterfall plot
+                st.subheader("📊 SHAP Waterfall Plot")
+                st.write("Shows how each feature contributes to the final prediction:")
+                
+                waterfall_buf = plot_shap_waterfall(explainer, transaction_df, feature_names)
+                if waterfall_buf:
+                    st.image(waterfall_buf, caption="SHAP Waterfall Plot - Feature Contributions")
+                
+                # Feature importance explanation
+                st.markdown("""
+                <div class="shap-explanation">
+                <h4>🧠 Understanding the Explanation:</h4>
+                <ul>
+                <li><strong>Red bars</strong>: Features that increase fraud probability</li>
+                <li><strong>Blue bars</strong>: Features that decrease fraud probability</li>
+                <li><strong>Bar size</strong>: Magnitude of the feature's impact</li>
+                <li><strong>Base value</strong>: Average prediction across all transactions</li>
+                </ul>
+                </div>
+                """, unsafe_allow_html=True)
             
     except Exception as e:
         st.error(f"Error making prediction: {str(e)}")
         st.error("Please check that the feature names match those used during training.")
+
+def display_prediction(transaction_df, model, model_name):
+    """Display prediction results - UPDATED to use new function."""
+    df = load_and_prepare_data()
+    if df is not None:
+        feature_names = get_feature_names(df)
+        display_prediction_with_shap(transaction_df, model, model_name, feature_names)
+    else:
+        st.error("Could not load dataset for SHAP explanations.")
 
 def main():
     st.markdown('<h1 class="main-header">🔍 Credit Card Fraud Detection</h1>', unsafe_allow_html=True)
@@ -171,7 +373,7 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox(
         "Choose a page",
-        ["🏠 Home", "📊 Dataset Overview", "🔮 Make Prediction", "📈 Model Performance", "🎯 Batch Prediction"]
+        ["🏠 Home", "📊 Dataset Overview", "🔮 Make Prediction", "📈 Model Performance", "🎯 Batch Prediction", "🧠 Model Insights"]  # Added new page
     )
     
     if page == "🏠 Home":
@@ -181,15 +383,17 @@ def main():
         This application uses machine learning to detect fraudulent credit card transactions.
         
         ### Features:
-        - **Real-time Prediction**: Analyze individual transactions
+        - **Real-time Prediction**: Analyze individual transactions with SHAP explanations
         - **Multiple Models**: Compare Logistic Regression, Random Forest, and XGBoost
+        - **Model Interpretability**: Understand why models make specific predictions
         - **Batch Processing**: Analyze multiple transactions at once
-        - **Model Explanations**: SHAP values for interpretability
+        - **Feature Insights**: Deep dive into feature importance and patterns
         
         ### How to Use:
-        1. Navigate to **Make Prediction** to analyze a single transaction
+        1. Navigate to **Make Prediction** to analyze a single transaction with explanations
         2. Check **Model Performance** to see how well our models work
-        3. Use **Batch Prediction** for multiple transactions
+        3. Use **Model Insights** to understand feature importance patterns
+        4. Use **Batch Prediction** for multiple transactions
         
         ### Dataset:
         The models are trained on credit card transaction data with 284,807 transactions and 492 fraud cases.
@@ -296,7 +500,7 @@ def main():
                 # Prepare transaction data
                 transaction_df = prepare_single_transaction(transaction_data, feature_names)
                 
-                # Make prediction
+                # Make prediction with SHAP explanation
                 display_prediction(transaction_df, selected_model, model_name)
     
     elif page == "📈 Model Performance":
@@ -455,6 +659,63 @@ def main():
                         
             except Exception as e:
                 st.error(f"Error loading CSV file: {str(e)}")
+    
+    # NEW PAGE: Model Insights
+    elif page == "🧠 Model Insights":
+        st.header("Model Insights & Feature Importance")
+        
+        # Load models and data
+        models = load_models()
+        df = load_and_prepare_data()
+        
+        if not models or df is None:
+            st.error("Models or data not found. Please run the training pipeline first.")
+            return
+        
+        feature_names = get_feature_names(df)
+        X_sample = df[feature_names].sample(n=500, random_state=42)
+        
+        # Model selection
+        model_name = st.selectbox("Select Model for Analysis", list(models.keys()))
+        selected_model = models[model_name]
+        
+        # Create explainer
+        explainer = create_shap_explainer(selected_model, X_sample)
+        
+        if explainer is not None:
+            st.subheader("🎯 Global Feature Importance")
+            
+            # SHAP summary plot
+            summary_buf = plot_shap_summary(explainer, X_sample, feature_names)
+            if summary_buf:
+                st.image(summary_buf, caption="SHAP Summary Plot - Feature Impact Distribution")
+            
+            # SHAP bar plot
+            st.subheader("📊 Feature Importance Ranking")
+            bar_buf = plot_shap_bar(explainer, X_sample, feature_names)
+            if bar_buf:
+                st.image(bar_buf, caption="SHAP Bar Plot - Average Feature Importance")
+            
+            # Feature statistics
+            st.subheader("📈 Feature Statistics")
+            if hasattr(selected_model, 'feature_importances_'):
+                feature_importance = pd.DataFrame({
+                    'Feature': feature_names,
+                    'Importance': selected_model.feature_importances_
+                }).sort_values('Importance', ascending=False)
+                
+                st.dataframe(feature_importance.head(20))
+            
+            # Insights
+            st.subheader("💡 Key Insights")
+            st.markdown("""
+            **Understanding SHAP Plots:**
+            - **Summary Plot**: Shows the distribution of SHAP values for each feature
+            - **Bar Plot**: Shows the average absolute SHAP value (feature importance)
+            - **Red/Pink**: Feature values that increase fraud probability
+            - **Blue**: Feature values that decrease fraud probability
+            - **Vertical spread**: Shows the range of impact for each feature
+            """)
 
 if __name__ == "__main__":
     main()
