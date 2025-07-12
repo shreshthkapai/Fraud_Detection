@@ -5,6 +5,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, roc_curve
+from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 import xgboost as xgb
@@ -53,28 +54,35 @@ def train_with_class_weights(X_train: pd.DataFrame, y_train: pd.Series) -> dict:
     return models
 
 def tune_logistic_regression(X_train: pd.DataFrame, y_train: pd.Series) -> LogisticRegression:
-    """Tune logistic regression with fixed convergence."""
+    """Tune logistic regression with proper scaling and convergence."""
+    
+    # Scale features for better convergence
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    
     param_grid = {
         'C': [0.1, 1, 10],
         'penalty': ['l2'],            
-        'solver': ['lbfgs'],           
-        'max_iter': [1000, 2000]        
+        'solver': ['liblinear', 'lbfgs'],  # Added liblinear as alternative
+        'max_iter': [5000]  # Increased iterations
     }
     
     lr = LogisticRegression(
         class_weight='balanced', 
-        random_state=42,
-        max_iter=2000  
-     )
+        random_state=42
+    )
 
-    grid_search = GridSearchCV(lr, param_grid, cv=2, scoring='roc_auc', n_jobs=1)
-    grid_search.fit(X_train, y_train)
+    grid_search = GridSearchCV(lr, param_grid, cv=3, scoring='roc_auc', n_jobs=-1)
+    grid_search.fit(X_train_scaled, y_train)
     
-    return grid_search.best_estimator_
+    # Store scaler with the model
+    best_model = grid_search.best_estimator_
+    best_model.scaler = scaler
+    
+    return best_model
 
 def tune_random_forest(X_train: pd.DataFrame, y_train: pd.Series) -> RandomForestClassifier:
     """Tune random forest with optimized parameters for faster execution."""
-    # OPTIMIZED: Reduced parameter grid
     param_grid = {
         'n_estimators': [50, 100],         
         'max_depth': [10, 15],             
@@ -84,33 +92,32 @@ def tune_random_forest(X_train: pd.DataFrame, y_train: pd.Series) -> RandomFores
     rf = RandomForestClassifier(
         class_weight='balanced', 
         random_state=42,
-        n_jobs=2  
+        n_jobs=-1
     )
     
-   
     grid_search = GridSearchCV(
         rf, param_grid, 
-        cv=2,          
+        cv=3,
         scoring='roc_auc', 
-        n_jobs=1,      
-        verbose=1     
+        n_jobs=-1
     )
     grid_search.fit(X_train, y_train)
     
     return grid_search.best_estimator_
 
-def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 15) -> xgb.XGBClassifier:
+def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> xgb.XGBClassifier:
     """Tune XGBoost with Optuna - optimized for faster execution."""
     
     def objective(trial):
         params = {
-            'n_estimators': trial.suggest_int('n_estimators', 50, 150),    
-            'max_depth': trial.suggest_int('max_depth', 3, 6),            
-            'learning_rate': trial.suggest_float('learning_rate', 0.05, 0.3),  
-            'subsample': trial.suggest_float('subsample', 0.7, 1.0),     
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.7, 1.0), 
+            'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+            'max_depth': trial.suggest_int('max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
             'scale_pos_weight': len(y_train[y_train == 0]) / len(y_train[y_train == 1]),
-            'random_state': 42
+            'random_state': 42,
+            'eval_metric': 'logloss'
         }
         
         model = xgb.XGBClassifier(**params)
@@ -119,12 +126,16 @@ def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int
         
         return roc_auc_score(y_train, y_pred_proba)
     
+    # Suppress optuna logs
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=n_trials)  
+    study.optimize(objective, n_trials=n_trials)
     
     best_params = study.best_params
     best_params['scale_pos_weight'] = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
     best_params['random_state'] = 42
+    best_params['eval_metric'] = 'logloss'
     
     return xgb.XGBClassifier(**best_params)
 
@@ -149,8 +160,14 @@ def evaluate_models(models: dict, X_test: pd.DataFrame, y_test: pd.Series) -> di
     results = {}
     
     for name, model in models.items():
-        y_pred = model.predict(X_test)
-        y_pred_proba = model.predict_proba(X_test)[:, 1]
+        # Handle scaled logistic regression
+        if name == 'logistic' and hasattr(model, 'scaler'):
+            X_test_scaled = model.scaler.transform(X_test)
+            y_pred = model.predict(X_test_scaled)
+            y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
+        else:
+            y_pred = model.predict(X_test)
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
         
         # Get classification report
         report = classification_report(y_test, y_pred, output_dict=True)
@@ -170,7 +187,13 @@ def plot_roc_curves(models: dict, X_test: pd.DataFrame, y_test: pd.Series):
     plt.figure(figsize=(10, 8))
     
     for name, model in models.items():
-        y_pred_proba = model.predict_proba(X_test)[:, 1]
+        # Handle scaled logistic regression
+        if name == 'logistic' and hasattr(model, 'scaler'):
+            X_test_scaled = model.scaler.transform(X_test)
+            y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
+        else:
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
+            
         fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
         auc = roc_auc_score(y_test, y_pred_proba)
         
@@ -196,5 +219,6 @@ def save_metrics(results: dict):
 
 def save_model(model, filepath: str):
     """Save trained model to disk."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, 'wb') as f:
         pickle.dump(model, f)
