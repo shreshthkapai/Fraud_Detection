@@ -82,7 +82,7 @@ This project showcases a range of techniques for handling real-world imbalanced 
 
 ### Model Performance (ROC Curves)
 
-*(You can add your `roc_curves.png` here)*
+*[Alt Text](outputs\plots\roc_curves.png)*
 
 ### Feature Importance (SHAP)
 
