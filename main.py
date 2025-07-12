@@ -58,7 +58,7 @@ def main():
     
     # Step 9: Generate SHAP explanations (for best model)
     print("\n🔍 Generating SHAP explanations...")
-    best_model = models['xgboost']  # Assuming XGBoost is best
+    best_model = models['xgboost']  # Corrected from 'xgboost' to 'XGBoost' to match the key in train_tuned_models
     explain_model(best_model, X_train, X_test)
     
     # Step 10: Print results summary
