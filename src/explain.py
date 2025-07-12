@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import pickle
 
 def generate_shap_explanations(model, X_train: pd.DataFrame, X_test: pd.DataFrame, sample_size: int = 1000):
     """Generate SHAP explanations for XGBoost model."""
@@ -77,5 +78,10 @@ def explain_model(model, X_train: pd.DataFrame, X_test: pd.DataFrame):
     plot_feature_importance(shap_values_test, X_test_sample)
     
     print("SHAP explanations saved to outputs/plots/")
+
+    os.makedirs('outputs', exist_ok=True)
+    with open('outputs/shap_explainer.pkl', 'wb') as f:
+        pickle.dump(explainer, f)
+
     
     return explainer, shap_values_test, X_test_sample
