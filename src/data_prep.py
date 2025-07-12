@@ -37,7 +37,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df['Day'] = df['Time'] // (24 * 3600)
     
     # Amount-based features
-    df['Amount_log'] = np.log1p(df['Amount'])  # log transform for skewed amount
+    df['Amount_log'] = np.log1p(df['Amount']) 
     
     # Transaction velocity (transactions per hour for each day)
     df['Trans_per_hour'] = df.groupby('Day')['Time'].transform('count') / 24
