@@ -3,6 +3,7 @@ import numpy as np
 from src.data_prep import load_data, clean_data, engineer_features, handle_outliers, normalize_features
 from src.model import stratified_split, train_tuned_models, evaluate_models, plot_roc_curves, save_metrics, save_model
 from src.explain import explain_model
+import pickle
 
 def main():
     print("🔍 Starting Fraud Detection Pipeline...")
@@ -15,20 +16,33 @@ def main():
     
     # Step 2: Clean and engineer features
     print("\n🔧 Cleaning and engineering features...")
+    # Step 2: Clean and engineer features
     df = clean_data(df)
     df = engineer_features(df)
-    df = handle_outliers(df)
-    
-    # Step 3: Prepare features and target
+
+#    💥 Cap outliers before scaling
+    df = handle_outliers(df, columns=['Amount'])
+
+        # Step 3: Prepare features and target
     print("\n🎯 Preparing features and target...")
-    # Select features (excluding engineered time features for simplicity)
-    feature_cols = [col for col in df.columns if col not in ['Class', 'Day', 'Hour', 'Trans_per_hour', 'Amount_log']]
+
+    # ✅ We want to keep Amount_log (not Amount)
+    feature_cols = [col for col in df.columns if col not in ['Class', 'Day', 'Hour', 'Trans_per_hour', 'Amount']]  
     X = df[feature_cols]
     y = df['Class']
-    
-    # Normalize Amount feature
-    X, scaler = normalize_features(X, ['Amount'])
-    
+
+    # ✅ Normalize Amount_log (make sure it's present)
+    X, scaler = normalize_features(X, ['Amount_log'])
+
+    # ✅ Save the scaler for later use in Streamlit
+    import os, pickle
+    os.makedirs('outputs', exist_ok=True)
+    with open('outputs/amount_scaler.pkl', 'wb') as f:
+        pickle.dump(scaler, f)
+
+    print(f"✅ Features used: {X.columns.tolist()}")
+
+
     # Step 4: Split data
     print("\n✂️ Splitting data...")
     X_train, X_test, y_train, y_test = stratified_split(X, y, test_size=0.2)
