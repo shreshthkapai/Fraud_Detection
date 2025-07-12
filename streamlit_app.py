@@ -1,185 +1,224 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
-import json
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, roc_curve
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
+import xgboost as xgb
+import optuna
 import pickle
+import json
 import matplotlib.pyplot as plt
-import seaborn as sns
-from PIL import Image
 import os
 
-# Import custom modules
-from src.data_prep import load_data, clean_data, engineer_features, handle_outliers, normalize_features
-from src.model import train_tuned_models, evaluate_models, plot_roc_curves, save_metrics
-from src.explain import explain_model
+def stratified_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2, random_state: int = 42) -> tuple:
+    """Split data with stratification to preserve class balance."""
+    return train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y)
 
-st.set_page_config(page_title="Fraud Detection Dashboard", layout="wide")
-
-@st.cache_data
-def load_metrics():
-    """Load saved metrics from JSON file."""
-    try:
-        with open('outputs/metrics.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-@st.cache_resource
-def load_trained_models():
-    """Load pre-trained models."""
-    models = {}
-    model_files = {
-        'Logistic Regression': 'outputs/logistic_model.pkl',
-        'Random Forest': 'outputs/rf_model.pkl',
-        'XGBoost': 'outputs/xgb_model.pkl'
-    }
+def handle_imbalance(X_train: pd.DataFrame, y_train: pd.Series, method: str = 'smote') -> tuple:
+    """Handle class imbalance using different sampling techniques."""
     
-    for name, filepath in model_files.items():
-        try:
-            with open(filepath, 'rb') as f:
-                models[name] = pickle.load(f)
-        except FileNotFoundError:
-            st.warning(f"Model {name} not found. Please train models first.")
+    if method == 'smote':
+        smote = SMOTE(random_state=42)
+        X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+    
+    elif method == 'undersample':
+        undersampler = RandomUnderSampler(random_state=42)
+        X_resampled, y_resampled = undersampler.fit_resample(X_train, y_train)
+    
+    elif method == 'none':
+        X_resampled, y_resampled = X_train, y_train
+    
+    return X_resampled, y_resampled
+
+def train_with_class_weights(X_train: pd.DataFrame, y_train: pd.Series) -> dict:
+    """Train models with balanced class weights."""
+    models = {}
+    
+    # Logistic Regression with balanced class weights
+    models['logistic'] = LogisticRegression(class_weight='balanced', random_state=42)
+    models['logistic'].fit(X_train, y_train)
+    
+    # Random Forest with balanced class weights
+    models['random_forest'] = RandomForestClassifier(
+        n_estimators=100, 
+        class_weight='balanced', 
+        random_state=42
+    )
+    models['random_forest'].fit(X_train, y_train)
     
     return models
 
-def simulate_transaction():
-    """Create input form for simulating a transaction."""
-    st.subheader("Simulate Transaction")
+def tune_logistic_regression(X_train: pd.DataFrame, y_train: pd.Series) -> LogisticRegression:
+    """Tune logistic regression with proper scaling and convergence."""
     
-    col1, col2 = st.columns(2)
+    # Scale features for better convergence
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
     
-    with col1:
-        amount = st.number_input("Amount ($)", min_value=0.0, value=100.0)
-        time_hours = st.slider("Time (hours)", 0, 23, 12)
-        
-    with col2:
-        # Simplified feature inputs (in practice, V1-V28 would be PCA components)
-        v1 = st.number_input("V1 (PCA Component)", value=0.0)
-        v2 = st.number_input("V2 (PCA Component)", value=0.0)
+    param_grid = {
+        'C': [0.1, 1, 10],
+        'penalty': ['l2'],            
+        'solver': ['liblinear', 'lbfgs'],  # Added liblinear as alternative
+        'max_iter': [5000]  # Increased iterations
+    }
     
-    if st.button("Predict Transaction"):
-        # Create feature vector (simplified)
-        features = {
-            'Time': time_hours * 3600,
-            'V1': v1, 'V2': v2,
-            'Amount': amount,
-            'Class': 0  # Placeholder
+    lr = LogisticRegression(
+        class_weight='balanced', 
+        random_state=42
+    )
+
+    grid_search = GridSearchCV(lr, param_grid, cv=3, scoring='roc_auc', n_jobs=-1)
+    grid_search.fit(X_train_scaled, y_train)
+    
+    # Store scaler with the model
+    best_model = grid_search.best_estimator_
+    best_model.scaler = scaler
+    
+    return best_model
+
+def tune_random_forest(X_train: pd.DataFrame, y_train: pd.Series) -> RandomForestClassifier:
+    """Tune random forest with optimized parameters for faster execution."""
+    param_grid = {
+        'n_estimators': [50, 100],         
+        'max_depth': [10, 15],             
+        'min_samples_split': [2, 5]         
+    }
+    
+    rf = RandomForestClassifier(
+        class_weight='balanced', 
+        random_state=42,
+        n_jobs=-1
+    )
+    
+    grid_search = GridSearchCV(
+        rf, param_grid, 
+        cv=3,
+        scoring='roc_auc', 
+        n_jobs=-1
+    )
+    grid_search.fit(X_train, y_train)
+    
+    return grid_search.best_estimator_
+
+def tune_xgboost_optuna(X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> xgb.XGBClassifier:
+    """Tune XGBoost with Optuna - optimized for faster execution."""
+    
+    def objective(trial):
+        params = {
+            'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+            'max_depth': trial.suggest_int('max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+            'scale_pos_weight': len(y_train[y_train == 0]) / len(y_train[y_train == 1]),
+            'random_state': 42,
+            'eval_metric': 'logloss'
         }
         
-        # Add dummy values for other V features
-        for i in range(3, 29):
-            features[f'V{i}'] = 0.0
+        model = xgb.XGBClassifier(**params)
+        model.fit(X_train, y_train)
+        y_pred_proba = model.predict_proba(X_train)[:, 1]
         
-        transaction_df = pd.DataFrame([features])
-        return transaction_df
+        return roc_auc_score(y_train, y_pred_proba)
     
-    return None
+    # Suppress optuna logs
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=n_trials)
+    
+    best_params = study.best_params
+    best_params['scale_pos_weight'] = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
+    best_params['random_state'] = 42
+    best_params['eval_metric'] = 'logloss'
+    
+    return xgb.XGBClassifier(**best_params)
 
-def display_prediction(transaction_df, model, model_name):
-    """Display prediction results."""
-    if transaction_df is not None:
-        # Prepare features
-        X = transaction_df.drop('Class', axis=1)
-        
-        # Make prediction
-        prediction = model.predict(X)[0]
-        prediction_proba = model.predict_proba(X)[0]
-        
-        # Display results
-        st.subheader("Prediction Results")
-        
-        if prediction == 1:
-            st.error(f"🚨 **FRAUD DETECTED** (Confidence: {prediction_proba[1]:.2%})")
+def train_tuned_models(X_train: pd.DataFrame, y_train: pd.Series) -> dict:
+    """Train and tune all models."""
+    models = {}
+    
+    print("Tuning Logistic Regression...")
+    models['logistic'] = tune_logistic_regression(X_train, y_train)
+    
+    print("Tuning Random Forest...")
+    models['random_forest'] = tune_random_forest(X_train, y_train)
+    
+    print("Tuning XGBoost...")
+    models['xgboost'] = tune_xgboost_optuna(X_train, y_train)
+    models['xgboost'].fit(X_train, y_train)
+    
+    return models
+
+def evaluate_models(models: dict, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
+    """Evaluate models and return comprehensive metrics."""
+    results = {}
+    
+    for name, model in models.items():
+        # Handle scaled logistic regression
+        if name == 'logistic' and hasattr(model, 'scaler'):
+            X_test_scaled = model.scaler.transform(X_test)
+            y_pred = model.predict(X_test_scaled)
+            y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
         else:
-            st.success(f"✅ **LEGITIMATE** (Confidence: {prediction_proba[0]:.2%})")
+            y_pred = model.predict(X_test)
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
         
-        # Show probability breakdown
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Legitimate Probability", f"{prediction_proba[0]:.2%}")
-        with col2:
-            st.metric("Fraud Probability", f"{prediction_proba[1]:.2%}")
+        # Get classification report
+        report = classification_report(y_test, y_pred, output_dict=True)
+        
+        results[name] = {
+            'precision': report['1']['precision'],
+            'recall': report['1']['recall'],
+            'f1_score': report['1']['f1-score'],
+            'roc_auc': roc_auc_score(y_test, y_pred_proba),
+            'confusion_matrix': confusion_matrix(y_test, y_pred).tolist()
+        }
+    
+    return results
 
-def display_metrics(metrics):
-    """Display model performance metrics."""
-    st.subheader("Model Performance Metrics")
+def plot_roc_curves(models: dict, X_test: pd.DataFrame, y_test: pd.Series):
+    """Plot and save ROC curves for all models."""
+    plt.figure(figsize=(10, 8))
     
-    if metrics:
-        # Create metrics comparison
-        metrics_df = pd.DataFrame(metrics).T
-        
-        # Display key metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        for i, (model_name, model_metrics) in enumerate(metrics.items()):
-            with [col1, col2, col3, col4][i % 4]:
-                st.metric(
-                    f"{model_name} - F1 Score",
-                    f"{model_metrics['f1_score']:.3f}"
-                )
-                st.metric(
-                    f"{model_name} - ROC AUC",
-                    f"{model_metrics['roc_auc']:.3f}"
-                )
-        
-        # Display detailed metrics table
-        st.dataframe(metrics_df.round(3))
-
-def display_plots():
-    """Display saved plots."""
-    st.subheader("Model Visualizations")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if os.path.exists('outputs/plots/roc_curves.png'):
-            st.image('outputs/plots/roc_curves.png', caption="ROC Curves")
+    for name, model in models.items():
+        # Handle scaled logistic regression
+        if name == 'logistic' and hasattr(model, 'scaler'):
+            X_test_scaled = model.scaler.transform(X_test)
+            y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
         else:
-            st.info("ROC curves not available. Train models first.")
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
+            
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+        auc = roc_auc_score(y_test, y_pred_proba)
+        
+        plt.plot(fpr, tpr, label=f'{name} (AUC = {auc:.3f})')
     
-    with col2:
-        if os.path.exists('outputs/plots/shap_summary.png'):
-            st.image('outputs/plots/shap_summary.png', caption="SHAP Feature Importance")
-        else:
-            st.info("SHAP plots not available. Generate explanations first.")
+    plt.plot([0, 1], [0, 1], 'k--', label='Random')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curves - Fraud Detection Models')
+    plt.legend()
+    plt.grid(True)
+    
+    os.makedirs('outputs/plots', exist_ok=True)
+    plt.savefig('outputs/plots/roc_curves.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
-def main():
-    st.title("🔍 Credit Card Fraud Detection Dashboard")
-    st.markdown("**Detect fraudulent transactions using machine learning**")
+def save_metrics(results: dict):
+    """Save evaluation metrics to JSON file."""
+    os.makedirs('outputs', exist_ok=True)
     
-    # Sidebar for model selection
-    st.sidebar.header("Model Selection")
-    models = load_trained_models()
-    
-    if models:
-        selected_model_name = st.sidebar.selectbox(
-            "Choose Model", 
-            list(models.keys())
-        )
-        selected_model = models[selected_model_name]
-    else:
-        st.error("No trained models found. Please train models first.")
-        return
-    
-    # Main content tabs
-    tab1, tab2, tab3 = st.tabs(["💳 Predict Transaction", "📊 Model Metrics", "📈 Visualizations"])
-    
-    with tab1:
-        transaction_df = simulate_transaction()
-        if transaction_df is not None:
-            display_prediction(transaction_df, selected_model, selected_model_name)
-    
-    with tab2:
-        metrics = load_metrics()
-        display_metrics(metrics)
-    
-    with tab3:
-        display_plots()
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("*Built with Streamlit • Powered by scikit-learn, XGBoost & SHAP*")
+    with open('outputs/metrics.json', 'w') as f:
+        json.dump(results, f, indent=2)
 
-if __name__ == "__main__":
-    main()
+def save_model(model, filepath: str):
+    """Save trained model to disk."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, 'wb') as f:
+        pickle.dump(model, f)
