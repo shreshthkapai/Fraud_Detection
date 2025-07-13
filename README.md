@@ -1,4 +1,3 @@
-
 # Fraud Detection System
 
 This project is a comprehensive machine learning pipeline for detecting fraudulent credit card transactions. It includes data preprocessing, model training, evaluation, and a Streamlit-based interactive dashboard for real-time predictions and model explainability.
@@ -82,7 +81,7 @@ This project showcases a range of techniques for handling real-world imbalanced 
 
 ### Model Performance (ROC Curves)
 
-*[Alt Text](outputs\plots\roc_curves.png)*
+![ROC Curves](outputs/plots/roc_curves.png)
 
 ### Feature Importance (SHAP)
 
