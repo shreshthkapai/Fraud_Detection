@@ -2,6 +2,8 @@
 
 This project is a comprehensive machine learning pipeline for detecting fraudulent credit card transactions. It includes data preprocessing, model training, evaluation, and a Streamlit-based interactive dashboard for real-time predictions and model explainability.
 
+[Live Demo](https://frauddetectionsk.streamlit.app/)
+
 ## Project Architecture
 
 The architecture is designed to be modular and reproducible, following standard MLOps best practices.
@@ -85,11 +87,11 @@ This project showcases a range of techniques for handling real-world imbalanced 
 
 ### Feature Importance (SHAP)
 
-*(You can add your `shap_feature_importance.png` here)*
+![SHAP Summary](outputs/plots/shap_summary.png)
 
-### Streamlit Dashboard
+### Confusion Matrix
 
-*(You can add a screenshot of your Streamlit app here)*
+![Confusion Matrix](outputs/plots/confusion_matrix.png)
 
 ## How to Run
 
