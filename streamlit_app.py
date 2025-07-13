@@ -299,18 +299,29 @@ def display_prediction_with_shap(transaction_df, model, model_name, feature_name
        with col1:
             if prediction == 1:
                 st.markdown("""
-                <div class="fraud-alert">
-                    <h3 style="color: black !important;">⚠️ FRAUD DETECTED</h3>
-                    <p style="color: black !important;">This transaction is flagged as potentially fraudulent.</p>
+                <div style="
+                    background-color: #ffcccc;
+                    padding: 1em;
+                    border-radius: 8px;
+                    color: black;
+                ">
+                    <h3 style="color: black; margin: 0;">⚠️ FRAUD DETECTED</h3>
+                    <p style="color: black; margin: 0;">This transaction is flagged as potentially fraudulent.</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown("""
-                <div class="safe-alert">
-                    <h3 style="color: black !important;">✅ TRANSACTION SAFE</h3>
-                    <p style="color: black !important;">This transaction appears to be legitimate.</p>
+                <div style="
+                    background-color: #ccffcc;
+                    padding: 1em;
+                    border-radius: 8px;
+                    color: black;
+                ">
+                    <h3 style="color: black; margin: 0;">✅ TRANSACTION SAFE</h3>
+                    <p style="color: black; margin: 0;">This transaction appears to be legitimate.</p>
                 </div>
                 """, unsafe_allow_html=True)
+
                 
         with col2:
             st.metric(
