@@ -114,7 +114,7 @@ python main.py
 ```
 
 This will:
-- Process the data in `data/raw.csv`.
+- Process the data in `data/creditcard.csv`.
 - Train the models specified in `src/model.py`.
 - Save the trained models, metrics, and plots to the `outputs/` directory.
 
