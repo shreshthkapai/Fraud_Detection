@@ -303,10 +303,9 @@ def display_prediction_with_shap(transaction_df, model, model_name, feature_name
                     background-color: #ffcccc;
                     padding: 1em;
                     border-radius: 8px;
-                    color: black;
                 ">
-                    <h3 style="color: black; margin: 0;">⚠️ FRAUD DETECTED</h3>
-                    <p style="color: black; margin: 0;">This transaction is flagged as potentially fraudulent.</p>
+                    <h3><span style="color: black !important;">⚠️ FRAUD DETECTED</span></h3>
+                    <p><span style="color: black !important;">This transaction is flagged as potentially fraudulent.</span></p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
@@ -315,10 +314,9 @@ def display_prediction_with_shap(transaction_df, model, model_name, feature_name
                     background-color: #ccffcc;
                     padding: 1em;
                     border-radius: 8px;
-                    color: black;
                 ">
-                    <h3 style="color: black; margin: 0;">✅ TRANSACTION SAFE</h3>
-                    <p style="color: black; margin: 0;">This transaction appears to be legitimate.</p>
+                    <h3><span style="color: black !important;">✅ TRANSACTION SAFE</span></h3>
+                    <p><span style="color: black !important;">This transaction appears to be legitimate.</span></p>
                 </div>
                 """, unsafe_allow_html=True)
 
