@@ -296,7 +296,7 @@ def display_prediction_with_shap(transaction_df, model, model_name, feature_name
         # Display results
         col1, col2 = st.columns(2)
         
-       with col1:
+        with col1:
             if prediction == 1:
                 st.markdown("""
                 <div class="fraud-alert">
